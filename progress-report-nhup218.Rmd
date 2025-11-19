@@ -1,0 +1,90 @@
+---
+title: "progress-report-nhup218"
+output: html_document
+author: "Nhu Phan"
+date: "2022-11-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rvest)
+library(dplyr)
+library(readr)
+library(stringr)
+library(Lahman)
+```
+
+# Lab 4: Scraping Baseball Hall of Fame 2025
+
+## Big Picture Goal
+
+The goal of this lab is to scrape the Baseball Hall of Fame 2025 voting results from Baseball-Reference.com, clean the data, and prepare it in a format compatible with the `Lahman::HallOfFame` table. This dataset will be saved as a CSV for team use.
+
+1. Scrape the Hall of Fame 2025 Table
+```{r}
+url <- "https://www.baseball-reference.com/awards/hof_2025.shtml"
+
+html <- read_html(url)
+
+# Extract all tables on the page
+
+tables <- html_table(html)
+
+# The main voting table is the first table
+
+raw <- tables[[1]]
+
+# Preview the first few rows
+
+head(raw)
+```
+
+2. Fix Column Names
+```{r}
+# move the first row into the header and remove it from the data.
+actual_names <- raw[1, ]     # first row = names
+colnames(raw) <- actual_names
+data <- raw[-1, ]  # drop the first row
+
+head(data)
+```
+
+3. Convert Columns to Numeric Where Needed
+```{r}
+# only keep the columns needed for Lahman: Name, YoB, Votes, %vote and convert them to numeric for calculations.
+data <- raw[-1, ] %>%
+  select(Name, YoB, Votes, `%vote`)  # only keep relevant columns
+data <- data %>%
+  mutate(
+    Votes = parse_number(Votes),
+    percent = parse_number(`%vote`),
+    YoB = parse_number(YoB)
+  )
+```
+
+4. Calculate ballots and needed votes
+
+```{r}
+# The maximum number of votes is used as total ballots. Needed votes is 75% of ballots, rounded up.
+ballots <- max(data$Votes, na.rm = TRUE)
+needed_votes <- ceiling(ballots * 0.75)
+
+# add all columns required for Lahman::HallOfFame. playerID is temporarily set as the player name.
+clean <- data %>%
+mutate(
+playerID = Name,            # placeholder for Lahman playerID
+yearID = 2025,
+votedBy = "BBWAA",
+ballots = ballots,
+needed = needed_votes,
+votes = Votes,
+inducted = ifelse(percent >= 75, "Y", "N"),
+category = "Player",
+needed_note = NA
+) %>%
+select(playerID, yearID, votedBy, ballots, needed, votes, inducted, category, needed_note)
+head(clean)
+
+# save cleaned data as CSV
+readr::write_csv(clean, "HallOfFame_2025.csv")
+```
