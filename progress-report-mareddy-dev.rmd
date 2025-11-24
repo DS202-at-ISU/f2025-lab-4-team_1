@@ -6,6 +6,157 @@ date: "2025-11-24"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rvest)
+library(Lahman)
 ```
 
-## R Markdown
+# Step 1: Load and examine the existing HallOfFame data structure
+```{r setup, include=FALSE}
+head(HallOfFame, 3)
+str(HallOfFame)
+```
+
+# Key columns we need to match:
+# playerID, yearID, votedBy, ballots, needed, votes, inducted, category, needed_note
+
+# Step 2: Scrape the 2025 Hall of Fame data
+```{r setup, include=FALSE}
+url <- "https://www.baseball-reference.com/awards/hof_2025.shtml"
+html <- read_html(url)
+tables <- html_table(html)
+```
+
+# Step 3: Extract and clean the main table
+```{r setup, include=FALSE}
+data <- tables[[1]]
+```
+
+# Fix column names (they're in the first row)
+```{r}
+actual_col_names <- data[1, ]
+colnames(data) <- actual_col_names
+data <- data[-1, ]
+
+head(data, 3)
+```
+
+# Step 4: Data cleaning and transformation
+
+
+``` {r}
+# Create a clean dataframe with the structure matching HallOfFame
+hof_2025 <- data %>%
+  mutate(
+    # Extract player name and clean it
+    Name = gsub("X-", "", Name),  # Remove X- prefix if present
+    
+    # Parse votes as numeric
+    Votes = as.numeric(Votes),
+    
+    # Parse percentage and determine if inducted (>75% = inducted)
+    pct = readr::parse_number(`%vote`),
+    inducted = ifelse(pct >= 75, "Y", "N"),
+    
+    # Calculate ballots from votes and percentage
+    ballots = round(Votes / (pct / 100)),
+    
+    # Calculate needed votes (75% of ballots)
+    needed = ceiling(ballots * 0.75),
+    
+    # Set constant values for 2025
+    yearID = 2025,
+    votedBy = "BBWAA",  # Baseball Writers' Association of America
+    category = "Player",
+    needed_note = NA
+  ) %>%
+  select(
+    Name,           # Keep for reference, will need playerID lookup
+    yearID,
+    votedBy,
+    ballots,
+    needed,
+    votes = Votes,
+    inducted,
+    category,
+    needed_note
+  )
+
+# View the cleaned data
+head(hof_2025, 10)
+```
+
+```{r}
+# Step 5: Add playerID column
+# Note: You'll need to match player names to playerID from the Master/People table
+# This is a challenging step and may require manual matching or fuzzy matching
+
+# Example approach using the People table from Lahman
+people <- Lahman::People
+
+# Function to help match names (simplified version)
+# You may need to manually verify these matches
+get_player_id <- function(player_name) {
+  # Split name into first and last
+  name_parts <- str_split(player_name, " ", simplify = TRUE)
+  
+  if (length(name_parts) >= 2) {
+    first_name <- name_parts[1]
+    last_name <- name_parts[length(name_parts)]
+    
+    # Try to find match in People table
+    match <- people %>%
+      filter(
+        str_detect(nameFirst, fixed(first_name, ignore_case = TRUE)) |
+        str_detect(nameLast, fixed(last_name, ignore_case = TRUE))
+      )
+    
+    if (nrow(match) == 1) {
+      return(match$playerID[1])
+    } else {
+      return(NA)  # Multiple or no matches - needs manual review
+    }
+  }
+  return(NA)
+}
+
+# Apply playerID matching (this will need refinement)
+hof_2025 <- hof_2025 %>%
+  rowwise() %>%
+  mutate(playerID = get_player_id(Name)) %>%
+  ungroup()
+
+# Step 6: Reorder columns to match HallOfFame structure
+hof_2025_final <- hof_2025 %>%
+  select(playerID, yearID, votedBy, ballots, needed, votes, inducted, category, needed_note)
+
+# Step 7: Verify data quality
+# Check for any missing playerIDs
+hof_2025_final %>%
+  filter(is.na(playerID)) %>%
+  select(playerID, votes, inducted)
+
+# Compare with actual 2025 data if available in Lahman package
+lahman_2025 <- HallOfFame %>% filter(yearID == 2025)
+if (nrow(lahman_2025) > 0) {
+  cat("Comparing scraped data with Lahman 2025 data:\n")
+  print(all.equal(hof_2025_final, lahman_2025))
+}
+
+# Step 8: Export the cleaned data
+write_csv(hof_2025_final, "HallOfFame_2025.csv")
+
+# Step 9: Visualize the results
+hof_2025_final %>%
+  ggplot(aes(x = reorder(playerID, -votes), y = votes, fill = inducted)) +
+  geom_col() +
+  geom_hline(yintercept = max(hof_2025_final$needed), linetype = "dashed", color = "red") +
+  labs(
+    title = "Hall of Fame 2025 Voting Results",
+    x = "Player",
+    y = "Votes Received",
+    fill = "Inducted"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
